@@ -9,7 +9,7 @@ import argparse
 device = torch.device("cpu")
 
 transforms = transforms.Compose([
-    transforms.Resize((112,112)),
+    transforms.Resize((224,224)),
     transforms.ToTensor(),
 ])
 
@@ -32,10 +32,16 @@ class Autoencoder(nn.Module):
             nn.ReLU(),
             nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1), 
             nn.ReLU(),
-            nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1), 
+            nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(512, 1028, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(), 
+ 
         )
 
         self.decoder = nn.Sequential(
+            nn.ConvTranspose2d(1028, 512, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.ReLU(),  
             nn.ConvTranspose2d(512, 256, kernel_size=3, stride=2, padding=1, output_padding=1),  
             nn.ReLU(),
             nn.ConvTranspose2d(256, 128, kernel_size=3, stride=2, padding=1, output_padding=1),   
@@ -92,7 +98,22 @@ def prep_training_data(path):
 
 
 def detect_anomalties(model, dataset):
-    x=5
+    model.eval()
+    criterion = nn.MSELoss()
+    reconstruction_losses = {"good": [], "bad": []}
+
+    with torch.no_grad():
+        for images, label in dataset:
+            images = images.to(device)
+            outputs = model(images)
+            loss = criterion(outputs, images).item()
+
+            if label == 1:
+                reconstruction_losses["good"].append(loss)
+            if label == 0:
+                reconstruction_losses["bad"].append(loss)
+    
+    return reconstruction_losses
 
 if __name__ == "__main__":
 
@@ -105,11 +126,11 @@ if __name__ == "__main__":
 
         print("Training model for pasta")
         train_loader_pasta = DataLoader(training_data_pasta, batch_size=32, shuffle=True)
-        loss_pasta = train_autoencoder(Autoencoder, train_loader_pasta, num_epochs=50,model_name="autoencoder_pasta.pth")
+        loss_pasta = train_autoencoder(Autoencoder, train_loader_pasta, num_epochs=300,model_name="autoencoder_pasta.pth")
 
         print("Training model for screws")
         train_loader_screws = DataLoader(training_data_screws, batch_size=32, shuffle=True)
-        loss_screws = train_autoencoder(Autoencoder, train_loader_pasta, num_epochs=50,model_name="autoencoder_screws.pth")
+        loss_screws = train_autoencoder(Autoencoder, train_loader_pasta, num_epochs=300,model_name="autoencoder_screws.pth")
 
         for epoch, loss in loss_pasta.items():
             print(f"Epoch {epoch}: Loss {loss:.4f}")  
@@ -127,7 +148,35 @@ if __name__ == "__main__":
         print("Loading test data")
         test_data_pasta = datasets.ImageFolder(root='./ece471_data/dataset/pasta/test', transform=transforms)
         test_data_screws = datasets.ImageFolder(root='./ece471_data/dataset/screws/test', transform=transforms)
-        
 
+        test_loader_pasta = DataLoader(test_data_pasta, batch_size=32, shuffle=False)
+        test_loader_screw = DataLoader(test_data_screws, batch_size=32, shuffle=False)
 
-  
+        losses_pasta = detect_anomalties(model_pasta, test_data_pasta)
+        losses_screws = detect_anomalties(model_screws, test_data_screws)
+        #print("Screw losses:", losses_screws)
+        #print("Pasta losses:", losses_pasta)
+
+        # Getting a threshold for anomalies
+        screw_loss_list_good = list(losses_screws["good"])
+        pasta_loss_list_good = list(losses_screws["good"])
+        screw_loss_threshold = max(screw_loss_list_good)
+        pasta_loss_threshold = max(pasta_loss_list_good)
+
+        # Detecting anomalies
+        pasta_loss_list_bad = list(losses_screws["bad"])
+        screw_loss_list_bad = list(losses_pasta["bad"])
+
+        true_positives = 0
+        for element in screw_loss_list_bad:
+            if element > screw_loss_threshold:
+                true_positives += 1
+        false_negatives = len(screw_loss_list_bad) - true_positives
+        print(f'For screws:, True Positives:{true_positives}, False Negatives:{false_negatives}')
+
+        true_positives = 0
+        for element in pasta_loss_list_bad:
+            if element > pasta_loss_threshold:
+                true_positives += 1
+        false_negatives = len(pasta_loss_list_bad) - true_positives
+        print(f'For pasta:, True Positives:{true_positives}, False Negatives:{false_negatives}')
