@@ -90,18 +90,8 @@ def prep_training_data(path):
     print(f"Total samples from {path} {len(good_dataset)}")
     return good_dataset
 
-def prep_test_date(path):
 
-    data_path = os.path.join('./ece471_data/dataset/', path)
-    data_path_good = os.path.join(path, '/good')
-    data_path_bad = os.path.join(path, '/bad')
-
-    good_dataset = datasets.ImageFolder(root=data_path_good, transform=transform)
-    bad_dataset = datasets.ImageFolder(root=data_path_bad, transform=transform)
-
-    return good_dataset, bad_dataset
-
-def detect_anomalties(model):
+def detect_anomalties(model, dataset):
     x=5
 
 if __name__ == "__main__":
@@ -133,5 +123,11 @@ if __name__ == "__main__":
         model_pasta = Autoencoder()
         model_screws.load_state_dict(torch.load("autoencoder_screws.pth"))
         model_pasta.load_state_dict(torch.load("autoencoder_pasta.pth"))
+
+        print("Loading test data")
+        test_data_pasta = datasets.ImageFolder(root='./ece471_data/dataset/pasta/test', transform=transforms)
+        test_data_screws = datasets.ImageFolder(root='./ece471_data/dataset/screws/test', transform=transforms)
+        
+
 
   
