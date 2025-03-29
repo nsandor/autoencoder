@@ -9,7 +9,8 @@ import argparse
 
 # Hyperparameters
 val_split = 0.1
-
+batch_size = 32
+training_epochs = 600
 # training model on my own pc
 if torch.cuda.is_available:
     device = "cuda:0"
@@ -104,10 +105,12 @@ def train_autoencoder(model, train_loader, val_loader, num_epochs=20, lr=0.001, 
     
 
     epochs = range(num_epochs)
-    plt.plot(epochs,losses,label='Training loss')
-    plt.plot(epochs,validation_losses,label="Validation loss")
+    fig,ax = plt.subplots()
+    ax.plot(epochs,losses,label='Training loss')
+    ax.plot(epochs,validation_losses,label="Validation loss")
     plt.xlabel("Epoch")
     plt.ylabel("MSE Loss")
+    ax.set_yscale("log")
     plt.title("Loss by epoch for "+model_name)
     plt.legend()
     plt.savefig("trainingcurve_"+model_name)
@@ -129,14 +132,23 @@ def prep_training_data(path):
     print(f"Samples from {path} split into {len(train_set)} training images and {len(val_set)} validation images")
     return val_set,train_set
 
+def plot_detector(loss_dict,threshold):
+    fig,ax = plt.subplots()
+    ax.plot(loss_dict["good"],'o')
+    ax.plot(loss_dict["bad"],'x')
+    plt.axhline(threshold,0,1)
+    plt.savefig("detect") 
+    plt.clf()
 
 def detect_anomalties(model, dataset):
+    model.cuda()
     model.eval()
     criterion = nn.MSELoss()
     reconstruction_losses = {"good": [], "bad": []}
 
     with torch.no_grad():
         for images, label in dataset:
+            images,label = images.cuda(),label.cuda()
             images = images.to(device)
             outputs = model(images)
             loss = criterion(outputs, images).item()
@@ -157,14 +169,14 @@ if __name__ == "__main__":
         Autoencoder = Autoencoder()
 
         print("Training model for pasta")
-        train_loader_pasta = DataLoader(training_data_pasta, batch_size=1, shuffle=True)
-        val_loader_pasta = DataLoader(validation_data_pasta, batch_size=1, shuffle=True)
-        loss_pasta = train_autoencoder(Autoencoder, train_loader_pasta, val_loader_pasta, num_epochs=30,model_name="autoencoder_pasta")
+        train_loader_pasta = DataLoader(training_data_pasta, batch_size=batch_size, shuffle=True)
+        val_loader_pasta = DataLoader(validation_data_pasta, batch_size=1, shuffle=False)
+        loss_pasta = train_autoencoder(Autoencoder, train_loader_pasta, val_loader_pasta, num_epochs=training_epochs,model_name="autoencoder_pasta")
 
         print("Training model for screws")
-        train_loader_screws = DataLoader(training_data_screws, batch_size=1, shuffle=True)
-        val_loader_screws = DataLoader(validation_data_screws, batch_size=1, shuffle=True)
-        loss_screws = train_autoencoder(Autoencoder, train_loader_screws, val_loader_screws, num_epochs=30,model_name="autoencoder_screws")
+        train_loader_screws = DataLoader(training_data_screws, batch_size=batch_size, shuffle=True)
+        val_loader_screws = DataLoader(validation_data_screws, batch_size=1, shuffle=False)
+        loss_screws = train_autoencoder(Autoencoder, train_loader_screws, val_loader_screws, num_epochs=training_epochs,model_name="autoencoder_screws")
 
     if detect:
         print("Loading Models")
@@ -182,12 +194,12 @@ if __name__ == "__main__":
 
         losses_pasta = detect_anomalties(model_pasta, test_loader_pasta)
         losses_screws = detect_anomalties(model_screws, test_loader_screw)
-        #print("Screw losses:", losses_screws)
-        #print("Pasta losses:", losses_pasta)
+        print("Screw losses:", losses_screws)
+        print("Pasta losses:", losses_pasta)
 
         # Getting a threshold for anomalies
         screw_loss_list_good = list(losses_screws["good"])
-        pasta_loss_list_good = list(losses_screws["good"])
+        pasta_loss_list_good = list(losses_pasta["good"])
         screw_loss_threshold = max(screw_loss_list_good)
         pasta_loss_threshold = max(pasta_loss_list_good)
 
@@ -208,3 +220,5 @@ if __name__ == "__main__":
                 true_positives += 1
         false_negatives = len(pasta_loss_list_bad) - true_positives
         print(f'For pasta:, True Positives:{true_positives}, False Negatives:{false_negatives}')
+        plot_detector(losses_pasta,pasta_loss_threshold)
+
