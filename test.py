@@ -1,12 +1,22 @@
 import torch
 from torch import nn, optim
-from torch.utils.data import DataLoader, ConcatDataset
+from torch.utils.data import DataLoader, ConcatDataset,random_split
 from torchvision import datasets, transforms
 import os
+import matplotlib.pyplot as plt
+import numpy as np
 import argparse
 
+# Hyperparameters
+val_split = 0.1
+
 # training model on my own pc
-device = torch.device("cpu")
+if torch.cuda.is_available:
+    device = "cuda:0"
+else:
+    device = "cpu"
+print("pytorch using device: ",device)
+device = torch.device(device)
 
 transforms = transforms.Compose([
     transforms.Resize((224,224)),
@@ -57,17 +67,18 @@ class Autoencoder(nn.Module):
         decoded = self.decoder(encoded)
         return decoded
 
-def train_autoencoder(model, train_loader, num_epochs=20, lr=0.001, model_name="autoencoder"):
+def train_autoencoder(model, train_loader, val_loader, num_epochs=20, lr=0.001, model_name="autoencoder"):
 
     model.to(device)
     criterion = nn.MSELoss()  
     optimizer = optim.Adam(model.parameters(), lr=lr)
-    loss_dict = {}
-
+    losses = []
+    validation_losses = []
+    
     for epoch in range(num_epochs):
         model.train()
         total_loss = 0.0
-
+        val_loss = 0.0
         for images, _ in train_loader:
             images = images.to(device)
 
@@ -79,22 +90,44 @@ def train_autoencoder(model, train_loader, num_epochs=20, lr=0.001, model_name="
             optimizer.step()
 
             total_loss += loss.item()
+        for images, _ in val_loader:
+            images = images.to(device)
+            outputs = model(images)
+            loss = criterion(outputs, images)
+            val_loss += loss.item()
 
         avg_loss = total_loss / len(train_loader)
-        loss_dict[epoch + 1] = avg_loss
+        avg_val_loss = val_loss / len(val_loader)
+        losses.append(avg_loss)
+        validation_losses.append(avg_val_loss)
+        print("Epoch [{}/{}], Avg Loss: {}, Validation loss: {}".format(epoch+1,num_epochs,avg_loss,avg_val_loss))
+    
 
-    torch.save(model.state_dict(), model_name)
-    print(f"model saved to {model_name}")
+    epochs = range(num_epochs)
+    plt.plot(epochs,losses,label='Training loss')
+    plt.plot(epochs,validation_losses,label="Validation loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("MSE Loss")
+    plt.title("Loss by epoch for "+model_name)
+    plt.legend()
+    plt.savefig("trainingcurve_"+model_name)
+    plt.clf()
 
-    return loss_dict
+    torch.save(model.state_dict(), model_name+".pth")
+    print(f"model saved to {model_name}"+".pth")
+
+    return losses
 
 def prep_training_data(path):
 
     data_path = os.path.join('./ece471_data/dataset/', path)
-    good_dataset = datasets.ImageFolder(root=data_path, transform=transforms)
+    dataset = datasets.ImageFolder(root=data_path, transform=transforms)
 
-    print(f"Total samples from {path} {len(good_dataset)}")
-    return good_dataset
+    # Validation split (fixed seed for now)
+    generator = torch.Generator().manual_seed(42)
+    val_set, train_set = random_split(dataset, [val_split, (1-val_split)], generator=generator)
+    print(f"Samples from {path} split into {len(train_set)} training images and {len(val_set)} validation images")
+    return val_set,train_set
 
 
 def detect_anomalties(model, dataset):
@@ -116,27 +149,22 @@ def detect_anomalties(model, dataset):
     return reconstruction_losses
 
 if __name__ == "__main__":
-
-
     if train:
         print("Preping models")
-        training_data_pasta = prep_training_data("pasta/train/good")
-        training_data_screws = prep_training_data("screws/train/good")
+        validation_data_pasta, training_data_pasta = prep_training_data("pasta/train/good")
+        validation_data_screws, training_data_screws = prep_training_data("screws/train/good")
+
         Autoencoder = Autoencoder()
 
         print("Training model for pasta")
-        train_loader_pasta = DataLoader(training_data_pasta, batch_size=32, shuffle=True)
-        loss_pasta = train_autoencoder(Autoencoder, train_loader_pasta, num_epochs=300,model_name="autoencoder_pasta.pth")
+        train_loader_pasta = DataLoader(training_data_pasta, batch_size=1, shuffle=True)
+        val_loader_pasta = DataLoader(validation_data_pasta, batch_size=1, shuffle=True)
+        loss_pasta = train_autoencoder(Autoencoder, train_loader_pasta, val_loader_pasta, num_epochs=30,model_name="autoencoder_pasta")
 
         print("Training model for screws")
-        train_loader_screws = DataLoader(training_data_screws, batch_size=32, shuffle=True)
-        loss_screws = train_autoencoder(Autoencoder, train_loader_pasta, num_epochs=300,model_name="autoencoder_screws.pth")
-
-        for epoch, loss in loss_pasta.items():
-            print(f"Epoch {epoch}: Loss {loss:.4f}")  
-
-        for epoch, loss in loss_screws.items():
-            print(f"Epoch {epoch}: Loss {loss:.4f}")
+        train_loader_screws = DataLoader(training_data_screws, batch_size=1, shuffle=True)
+        val_loader_screws = DataLoader(validation_data_screws, batch_size=1, shuffle=True)
+        loss_screws = train_autoencoder(Autoencoder, train_loader_screws, val_loader_screws, num_epochs=30,model_name="autoencoder_screws")
 
     if detect:
         print("Loading Models")
@@ -146,14 +174,14 @@ if __name__ == "__main__":
         model_pasta.load_state_dict(torch.load("autoencoder_pasta.pth"))
 
         print("Loading test data")
-        test_data_pasta = datasets.ImageFolder(root='./ece471_data/dataset/pasta/test', transform=transforms)
-        test_data_screws = datasets.ImageFolder(root='./ece471_data/dataset/screws/test', transform=transforms)
+        test_data_pasta = datasets.ImageFolder(root='./ece471_data/dataset/pasta/test/', transform=transforms)
+        test_data_screws = datasets.ImageFolder(root='./ece471_data/dataset/screws/test/', transform=transforms)
+        
+        test_loader_pasta = DataLoader(test_data_pasta, batch_size=1, shuffle=False)
+        test_loader_screw = DataLoader(test_data_screws, batch_size=1, shuffle=False)
 
-        test_loader_pasta = DataLoader(test_data_pasta, batch_size=32, shuffle=False)
-        test_loader_screw = DataLoader(test_data_screws, batch_size=32, shuffle=False)
-
-        losses_pasta = detect_anomalties(model_pasta, test_data_pasta)
-        losses_screws = detect_anomalties(model_screws, test_data_screws)
+        losses_pasta = detect_anomalties(model_pasta, test_loader_pasta)
+        losses_screws = detect_anomalties(model_screws, test_loader_screw)
         #print("Screw losses:", losses_screws)
         #print("Pasta losses:", losses_pasta)
 
