@@ -12,6 +12,7 @@ from sklearn.metrics import accuracy_score, roc_auc_score
 val_split = 0.1
 batch_size = 1
 training_epochs = 150
+
 # training model on my own pc
 if torch.cuda.is_available:
     device = "cuda:0"
@@ -167,7 +168,8 @@ def detect_anomalties(model, dataset):
     model.cuda()
     model.eval()
     criterion = nn.MSELoss()
-    reconstruction_losses = {"good": [], "bad": []}
+    TrueLabels = []
+    Loss = []
 
     with torch.no_grad():
         for images, label in dataset:
@@ -175,13 +177,10 @@ def detect_anomalties(model, dataset):
             images = images.to(device)
             outputs = model(images)
             loss = criterion(outputs, images).item()
+            Loss.append(loss)
+            TrueLabels.append(label)
 
-            if label == 1:
-                reconstruction_losses["good"].append(loss)
-            if label == 0:
-                reconstruction_losses["bad"].append(loss)
-
-    return reconstruction_losses
+    return Loss,TrueLabels
 
 
 if __name__ == "__main__":
@@ -241,14 +240,15 @@ if __name__ == "__main__":
             root="./ece471_data/dataset/screws/test/", transform=transforms
         )
 
-        losses_pasta = detect_anomalties(model_pasta, test_data_pasta)
-        losses_screws = detect_anomalties(model_screws, test_data_screws)
-
+        losses_pasta,Pasta_labels = detect_anomalties(model_pasta, test_data_pasta)
+        losses_screws,Screw_labels = detect_anomalties(model_screws, test_data_screws)
+        print(Pasta_labels)
         # Getting a threshold for anomalies
-        screw_loss_list_good = list(losses_screws["good"])
-        pasta_loss_list_good = list(losses_pasta["good"])
-        screw_loss_threshold = max(screw_loss_list_good)
-        pasta_loss_threshold = max(pasta_loss_list_good)
-
-        plot_detector(losses_pasta, pasta_loss_threshold, "Pasta")
-        plot_detector(losses_screws, screw_loss_threshold, "screw")
+        #screw_loss_list_good = list(losses_screws["good"])
+        #pasta_loss_list_good = list(losses_pasta["good"])
+        #screw_loss_threshold = max(screw_loss_list_good)
+        #pasta_loss_threshold = max(pasta_loss_list_good)
+        print("Auroc Score, Pasta:", roc_auc_score(Pasta_labels,losses_pasta))
+        print("Auroc Score, screws:", roc_auc_score(Screw_labels,losses_screws))
+        #plot_detector(losses_pasta, pasta_loss_threshold, "Pasta")
+        #plot_detector(losses_screws, screw_loss_threshold, "screw")
