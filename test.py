@@ -1,7 +1,10 @@
 import torch
+import PIL.ImageFilter
+import PIL.ImageOps
 from torch import nn, optim
 from torch.utils.data import DataLoader, ConcatDataset, random_split
 from torchvision import datasets, transforms
+from torchvision.transforms import v2
 import os
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,9 +12,9 @@ import argparse
 from sklearn.metrics import accuracy_score, roc_auc_score
 
 # Hyperparameters
-val_split = 0.1
-batch_size = 1
-training_epochs = 150
+val_split = 0.01
+batch_size = 16
+training_epochs = 300
 
 # training model on my own pc
 if torch.cuda.is_available:
@@ -21,12 +24,21 @@ else:
 print("pytorch using device: ", device)
 device = torch.device(device)
 
-transforms = transforms.Compose(
+transforms_tr = transforms.Compose(
     [
         transforms.Resize((224, 224)),
+        transforms.Grayscale(num_output_channels=1),
         transforms.ToTensor(),
     ]
 )
+transforms_te = transforms.Compose(
+    [
+        transforms.Resize((224, 224)),
+        transforms.Grayscale(num_output_channels=1),
+    ]
+)
+trans = transforms.Compose([
+    transforms.ToTensor()])
 
 # Argument passing
 parser = argparse.ArgumentParser(
@@ -43,26 +55,32 @@ class Autoencoder(nn.Module):
         super(Autoencoder, self).__init__()
 
         self.encoder = nn.Sequential(
-            nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(1, 16, kernel_size=3, stride=1, padding=1),
             nn.LeakyReLU(0.01),
+            nn.BatchNorm2d(16),
             nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
             nn.LeakyReLU(0.01),
+            nn.BatchNorm2d(32),
             nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
             nn.LeakyReLU(0.01),
-            nn.Conv2d(64, 8, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+            nn.Conv2d(64, 2, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
         )
 
         self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(8, 64, kernel_size=3, stride=1, padding=1),
+            nn.ConvTranspose2d(2, 64, kernel_size=3, stride=1, padding=1),
             nn.LeakyReLU(0.01),
+            nn.BatchNorm2d(64),
             nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1),
             nn.LeakyReLU(0.01),
+            nn.BatchNorm2d(32),
             nn.ConvTranspose2d(
                 32, 16, kernel_size=3, stride=2, padding=0, output_padding=1
             ),
             nn.LeakyReLU(0.01),
-            nn.ConvTranspose2d(16, 3, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(16),
+            nn.ConvTranspose2d(16, 1, kernel_size=3, stride=1, padding=1),
             nn.Sigmoid(),
         )
 
@@ -134,7 +152,7 @@ def train_autoencoder(
 def prep_training_data(path):
 
     data_path = os.path.join("./ece471_data/dataset/", path)
-    dataset = datasets.ImageFolder(root=data_path, transform=transforms)
+    dataset = datasets.ImageFolder(root=data_path, transform=transforms_tr)
 
     # Validation split (fixed seed for now)
     generator = torch.Generator().manual_seed(42)
@@ -147,13 +165,19 @@ def prep_training_data(path):
     return val_set, train_set
 
 
-def plot_detector(loss_dict, threshold, name):
+def plot_detector(losses,labels, name):
     fig, ax = plt.subplots(figsize=(4, 6))
-    ax.plot(loss_dict["good"], "o", label="Normal")
-    ax.plot(loss_dict["bad"], "x", color="red", label="Anomaly")
+    for loss,label in zip(losses,labels):
+        if label == 0:
+            indic = "o"
+            colorval = "blue"
+        else:
+            indic = "x"
+            colorval = "red"
+        ax.plot(loss,indic,color=colorval)
     plt.title("True classes and decision boundary for " + name)
     plt.ylabel("Reconstruction loss")
-    plt.axhline(threshold, 0, 1, linestyle="-", color="green", label="Threshold")
+    #plt.axhline(threshold, 0, 1, linestyle="-", color="green", label="Threshold")
     plt.legend()
     plt.savefig("detect_" + name)
     plt.clf()
@@ -173,7 +197,11 @@ def detect_anomalties(model, dataset):
 
     with torch.no_grad():
         for images, label in dataset:
+            contrasted = PIL.ImageOps.equalize(images)
+            denoised = contrasted.filter(PIL.ImageFilter.MedianFilter(size=3))
+            images = trans(denoised)
             images = images.cuda()
+            images = images.unsqueeze(0)
             images = images.to(device)
             outputs = model(images)
             loss = criterion(outputs, images).item()
@@ -234,10 +262,10 @@ if __name__ == "__main__":
 
         print("Loading test data")
         test_data_pasta = datasets.ImageFolder(
-            root="./ece471_data/dataset/pasta/test/", transform=transforms
+            root="./ece471_data/dataset/pasta/test/", transform=transforms_te
         )
         test_data_screws = datasets.ImageFolder(
-            root="./ece471_data/dataset/screws/test/", transform=transforms
+            root="./ece471_data/dataset/screws/test/", transform=transforms_te
         )
 
         losses_pasta,Pasta_labels = detect_anomalties(model_pasta, test_data_pasta)
@@ -250,5 +278,5 @@ if __name__ == "__main__":
         #pasta_loss_threshold = max(pasta_loss_list_good)
         print("Auroc Score, Pasta:", roc_auc_score(Pasta_labels,losses_pasta))
         print("Auroc Score, screws:", roc_auc_score(Screw_labels,losses_screws))
-        #plot_detector(losses_pasta, pasta_loss_threshold, "Pasta")
-        #plot_detector(losses_screws, screw_loss_threshold, "screw")
+        plot_detector(losses_pasta,Pasta_labels, "Pasta")
+        plot_detector(losses_screws,Screw_labels, "screw")
